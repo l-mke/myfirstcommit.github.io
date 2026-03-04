@@ -24,6 +24,8 @@
 ## Быстрый запуск
 
 ```bash
+cp .env.example .env
+# заполните ключи/параметры в .env
 python3 bot.py
 ```
 
@@ -67,6 +69,7 @@ python3 bot.py --live
 - `BOT_REJECT_PROB`
 - `SENTRY_DSN`
 - `OTEL_ENABLED`
+- `BOT_DOTENV_PATH` — путь к dotenv-файлу (default `.env`).
 
 ## Тесты
 

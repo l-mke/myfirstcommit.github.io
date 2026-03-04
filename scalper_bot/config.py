@@ -4,6 +4,25 @@ import os
 from dataclasses import dataclass
 
 
+def _load_dotenv_if_present(path: str = ".env") -> None:
+    if not os.path.exists(path):
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        return
+
+
 @dataclass(frozen=True)
 class StrategyConfig:
     top_n: int = 10
@@ -75,6 +94,7 @@ class BotConfig:
 
     @staticmethod
     def from_env() -> "BotConfig":
+        _load_dotenv_if_present(os.getenv("BOT_DOTENV_PATH", ".env"))
         testnet = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
         default_ws_url = "wss://stream-testnet.bybit.com/v5/private" if testnet else "wss://stream.bybit.com/v5/private"
         return BotConfig(
