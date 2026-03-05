@@ -67,6 +67,8 @@ python3 bot.py --live
 - `BOT_SIMULATE_FILLS`
 - `BOT_PARTIAL_FILL_PROB`
 - `BOT_REJECT_PROB`
+- `BOT_TP_PARTIAL_CLOSE_RATIO` — доля позиции для частичного закрытия на TP (0..1).
+- `BOT_TRAILING_DISTANCE_PCT` — дистанция трейлинга после частичного закрытия (напр. `0.003` = 0.3%).
 - `SENTRY_DSN`
 - `OTEL_ENABLED`
 - `BOT_DOTENV_PATH` — путь к dotenv-файлу (default `.env`).

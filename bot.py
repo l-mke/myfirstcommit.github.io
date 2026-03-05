@@ -12,6 +12,7 @@ from scalper_bot.config import BotConfig
 from scalper_bot.detectors import build_microstructure_state, detect_levels_from_candles, detect_patterns
 from scalper_bot.event_store import JsonlEventStore
 from scalper_bot.execution import ExecutionSimulator, OrderIntent, PaperExecutor
+from scalper_bot.exits import build_exit_plan, simulate_partial_tp_and_trailing
 from scalper_bot.features import CoinSelector
 from scalper_bot.l2_ws import L2SequencedBook
 from scalper_bot.metrics import AlertEngine, AlertThresholds, ExecutionQualityMonitor, ExecutionSample
@@ -279,6 +280,27 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             return
 
         qty_str = f"{max(0.001, qty):.3f}"
+
+        exit_plan = build_exit_plan(
+            side=side,
+            entry=entry,
+            stop_loss=stop,
+            levels=levels,
+            partial_close_ratio=cfg.execution.tp_partial_close_ratio,
+            trailing_distance_pct=cfg.execution.trailing_distance_pct,
+        )
+        event_store.append(
+            "exit.plan",
+            {
+                "symbol": symbol,
+                "side": side,
+                "take_profit": exit_plan.take_profit,
+                "stop_loss": exit_plan.stop_loss,
+                "partial_ratio": exit_plan.partial_close_ratio,
+                "trailing_distance_pct": exit_plan.trailing_distance_pct,
+            },
+        )
+
         created_ts = int(time.time() * 1000)
 
         if live:
@@ -337,6 +359,27 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             metrics.inc("orders_rejected")
 
         event_store.append("execution", {"symbol": symbol, "status": status, "filled_qty": filled_qty, "fee_paid": fee_paid, "latency_ms": simulated_latency})
+
+        # Partial TP + trailing-stop lifecycle simulation based on recent/future-like path
+        path = [c.close for c in candles[-30:]]
+        if side == "Buy":
+            path.extend([entry * 1.002, exit_plan.take_profit * 1.001, exit_plan.take_profit * 1.004, exit_plan.take_profit * (1 - cfg.execution.trailing_distance_pct * 1.1)])
+        else:
+            path.extend([entry * 0.998, exit_plan.take_profit * 0.999, exit_plan.take_profit * 0.996, exit_plan.take_profit * (1 + cfg.execution.trailing_distance_pct * 1.1)])
+
+        exit_result = simulate_partial_tp_and_trailing(exit_plan, total_qty=filled_qty, price_path=path)
+        event_store.append(
+            "exit.result",
+            {
+                "symbol": symbol,
+                "tp_hit": exit_result.tp_hit,
+                "partial_closed_qty": exit_result.partial_closed_qty,
+                "trailing_activated": exit_result.trailing_activated,
+                "trailing_stop_price": exit_result.trailing_stop_price,
+                "exit_price": exit_result.exit_price,
+                "reason": exit_result.reason,
+            },
+        )
 
         alert_msgs = alerts.evaluate(
             monitor,

@@ -81,6 +81,8 @@ class ExecutionConfig:
     simulate_fills_in_paper: bool = True
     partial_fill_probability: float = 0.3
     reject_probability: float = 0.02
+    tp_partial_close_ratio: float = 0.5
+    trailing_distance_pct: float = 0.003
 
 
 @dataclass(frozen=True)
@@ -126,5 +128,7 @@ class BotConfig:
                 simulate_fills_in_paper=os.getenv("BOT_SIMULATE_FILLS", "true").lower() == "true",
                 partial_fill_probability=float(os.getenv("BOT_PARTIAL_FILL_PROB", "0.3")),
                 reject_probability=float(os.getenv("BOT_REJECT_PROB", "0.02")),
+                tp_partial_close_ratio=float(os.getenv("BOT_TP_PARTIAL_CLOSE_RATIO", "0.5")),
+                trailing_distance_pct=float(os.getenv("BOT_TRAILING_DISTANCE_PCT", "0.003")),
             ),
         )
