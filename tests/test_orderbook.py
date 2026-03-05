@@ -18,6 +18,7 @@ def test_snapshot_and_delta_application() -> None:
     state = agg.apply(snapshot)
     assert state.bid1 == (100.0, 1.0)
     assert state.ask1 == (100.5, 1.5)
+    assert round(state.spread_bps, 3) == round(((100.5 - 100.0) / 100.25) * 10_000, 3)
 
     delta = OrderbookUpdate(
         symbol="BTCUSDT",

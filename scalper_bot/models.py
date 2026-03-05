@@ -78,6 +78,15 @@ class OrderbookState:
             return None
         return (self.bid1[0] + self.ask1[0]) / 2
 
+    @property
+    def spread_bps(self) -> float:
+        if self.bid1 is None or self.ask1 is None:
+            return 999.0
+        mid = self.mid
+        if not mid or mid <= 0:
+            return 999.0
+        return ((self.ask1[0] - self.bid1[0]) / mid) * 10_000
+
 
 @dataclass
 class Signal:
