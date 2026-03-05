@@ -29,6 +29,8 @@ cp .env.example .env
 python3 bot.py
 ```
 
+После запуска вы увидите пошаговые логи в терминале: выбор символа, загрузка свечей/стакана, метрики микроструктуры, причину сигнала/блокировки, размер позиции, план выхода (TP/trailing), результат исполнения.
+
 ## Replay событий
 
 ```bash
@@ -47,31 +49,59 @@ python3 bot.py --live
 
 ## Переменные окружения
 
-- `BYBIT_API_KEY` / `BYBIT_API_SECRET` — private endpoints.
-- `BYBIT_TESTNET` — `true|false` (default `true`).
-- `BYBIT_LIVE_TRADING` — `true|false` (default `false`).
-- `BYBIT_CATEGORY` — `linear` (default).
-- `BYBIT_SETTLE_COIN` — `USDT` (default).
-- `BYBIT_ORDER_TYPE` — `Market`/`Limit`.
-- `BYBIT_PRIVATE_WS_ENABLED` — `true|false` (default `false`).
-- `BYBIT_PRIVATE_WS_URL` — URL private WS.
-- `BYBIT_LEVERAGE` — целевое плечо (например `3`).
-- `BYBIT_SET_LEVERAGE_ON_START` — `true|false`, выставлять плечо перед live-ордером.
+Ниже — **все параметры**, которые бот читает из окружения (`.env` или `export ...`).
 
-- `BOT_EQUITY_USDT`
-- `BOT_KLINE_INTERVAL`, `BOT_KLINE_LIMIT`
-- `BOT_ORDERBOOK_LIMIT`
-- `BOT_EVENT_STORE_PATH`
-- `BOT_MAX_AVG_SLIPPAGE_BPS`
-- `BOT_MAX_AVG_FILL_DELAY_MS`
-- `BOT_SIMULATE_FILLS`
-- `BOT_PARTIAL_FILL_PROB`
-- `BOT_REJECT_PROB`
-- `BOT_TP_PARTIAL_CLOSE_RATIO` — доля позиции для частичного закрытия на TP (0..1).
-- `BOT_TRAILING_DISTANCE_PCT` — дистанция трейлинга после частичного закрытия (напр. `0.003` = 0.3%).
-- `SENTRY_DSN`
-- `OTEL_ENABLED`
-- `BOT_DOTENV_PATH` — путь к dotenv-файлу (default `.env`).
+### 1) Биржа и режим торговли
+
+| Параметр | По умолчанию | Что делает |
+|---|---:|---|
+| `BYBIT_API_KEY` | `""` | API key для приватных методов (ордера, плечо, private WS). |
+| `BYBIT_API_SECRET` | `""` | API secret для подписи приватных запросов. |
+| `BYBIT_TESTNET` | `true` | Переключает testnet/mainnet endpoint. Для старта держите `true`. |
+| `BYBIT_LIVE_TRADING` | `false` | Защита от случайной реальной торговли. Для live должно быть `true` **и** запуск с `--live`. |
+| `BYBIT_CATEGORY` | `linear` | Категория рынка Bybit (обычно linear для USDT perpetual). |
+| `BYBIT_SETTLE_COIN` | `USDT` | Фильтр инструментов по монете расчёта (например, `BTCUSDT`, `ETHUSDT`). |
+| `BYBIT_ORDER_TYPE` | `Market` | Тип ордера (`Market`/`Limit`) при отправке live заявки. |
+| `BYBIT_PRIVATE_WS_ENABLED` | `false` | Включает private WS стримы (ордера/позиции/исполнения). |
+| `BYBIT_PRIVATE_WS_URL` | auto by testnet/mainnet | URL private WebSocket (можно переопределить вручную). |
+| `BYBIT_LEVERAGE` | `3` | Целевое плечо для инструмента. |
+| `BYBIT_SET_LEVERAGE_ON_START` | `false` | Если `true`, бот перед live-ордером вызовет `set-leverage` на бирже. |
+
+### 2) Runtime и источники данных
+
+| Параметр | По умолчанию | Что делает |
+|---|---:|---|
+| `BOT_EQUITY_USDT` | `10000` | Виртуальный размер капитала для риск-менеджера (расчёт размера позиции). |
+| `BOT_KLINE_INTERVAL` | `1` | Таймфрейм свечей для уровней/паттернов. |
+| `BOT_KLINE_LIMIT` | `200` | Сколько свечей загружать для анализа. |
+| `BOT_ORDERBOOK_LIMIT` | `50` | Глубина стакана L2 для snapshot/микроструктуры. |
+| `BOT_EVENT_STORE_PATH` | `events/bot_events.jsonl` | Куда писать события запуска (аудит, replay). |
+| `BOT_DOTENV_PATH` | `.env` | Путь к dotenv-файлу, который бот читает перед стартом. |
+| `BOT_LOG_LEVEL` | `INFO` | Уровень логов в терминале (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+
+### 3) Исполнение, TP и трейлинг
+
+| Параметр | По умолчанию | Что делает |
+|---|---:|---|
+| `BOT_SIMULATE_FILLS` | `true` | Режим симуляции исполнений в paper-сценарии. |
+| `BOT_PARTIAL_FILL_PROB` | `0.3` | Вероятность частичного исполнения в симуляторе. |
+| `BOT_REJECT_PROB` | `0.02` | Вероятность отказа ордера в симуляторе. |
+| `BOT_TP_PARTIAL_CLOSE_RATIO` | `0.5` | Доля позиции, закрываемая на первом TP (частичная фиксация). |
+| `BOT_TRAILING_DISTANCE_PCT` | `0.003` | Дистанция трейлинга после частичного TP (`0.003` = 0.3%). |
+
+### 4) Мониторинг и observability
+
+| Параметр | По умолчанию | Что делает |
+|---|---:|---|
+| `BOT_MAX_AVG_SLIPPAGE_BPS` | `8` | Порог алерта по среднему slippage. |
+| `BOT_MAX_AVG_FILL_DELAY_MS` | `1500` | Порог алерта по средней задержке исполнения. |
+| `SENTRY_DSN` | `""` | DSN для отправки ошибок в Sentry (если задан). |
+| `OTEL_ENABLED` | `false` | Включает инициализацию OpenTelemetry провайдера. |
+
+### Важно: что пока настраивается **в коде**, а не через `.env`
+
+Некоторые стратегические параметры пока зашиты в `scalper_bot/config.py` (например, `top_n`, `candidate_pool`, `max_spread_bps`, `imbalance_min`, риск-лимиты `risk_per_trade` и т.д.).
+Если хотите, следующим шагом вынесу их в `.env`, чтобы вообще ничего не править в коде.
 
 ## Тесты
 

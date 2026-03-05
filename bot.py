@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import time
 from typing import Dict, List
@@ -111,7 +112,8 @@ def _start_private_stream_if_enabled(cfg: BotConfig, event_store: JsonlEventStor
 
 def run_once(live: bool = False, replay: bool = False) -> None:
     cfg = BotConfig.from_env()
-    logger = setup_logger()
+    log_level = getattr(logging, cfg.runtime.log_level, logging.INFO)
+    logger = setup_logger(level=log_level)
     secrets = EnvSecretsProvider().load()
 
     if cfg.monitoring.otel_enabled:
@@ -122,11 +124,14 @@ def run_once(live: bool = False, replay: bool = False) -> None:
     metrics = MetricsRegistry()
 
     if replay:
+        logger.info("Replay mode enabled, reading events from %s", cfg.runtime.event_store_path)
         count = event_store.replay(lambda e: print({"ts_ms": e.ts_ms, "topic": e.topic, "payload": e.payload}))
+        logger.info("Replay complete: %s events", count)
         print({"replay_events": count})
         return
 
     logger.info("Starting bot (live=%s, api_key=%s)", live, redact(secrets.bybit_api_key))
+    logger.info("Config summary: testnet=%s symbol_settle=%s interval=%s orderbook_limit=%s", cfg.exchange.testnet, cfg.exchange.settle_coin, cfg.runtime.kline_interval, cfg.runtime.orderbook_limit)
 
     client = BybitRESTClient.from_env()
     selector = CoinSelector(cfg.strategy.w_volatility, cfg.strategy.w_liquidity, cfg.strategy.w_activity)
@@ -148,7 +153,9 @@ def run_once(live: bool = False, replay: bool = False) -> None:
     try:
         try:
             tickers = [t for t in client.get_tickers(cfg.exchange.category) if t.symbol.endswith(cfg.exchange.settle_coin)]
+            logger.info("Loaded tickers from Bybit: %s", len(tickers))
         except Exception as exc:
+            logger.warning("Tickers unavailable, using local fallback: %s", exc)
             event_store.append("warning", {"reason": f"tickers unavailable: {exc}"})
             tickers = _sample_tickers()
             metrics.inc("fallback_tickers")
@@ -160,6 +167,7 @@ def run_once(live: bool = False, replay: bool = False) -> None:
         trade_counts_proxy = {t.symbol: int(max(1.0, t.volume_24h)) for t in candidates}
         ranked = selector.rank(candidates, trade_counts_proxy, top_n=cfg.strategy.top_n)
         symbol = ranked[0].symbol
+        logger.info("Selected symbol=%s score=%.4f from %s candidates", symbol, ranked[0].score, len(candidates))
         event_store.append("selection", {"symbol": symbol, "score": ranked[0].score})
 
         ticker = next(t for t in candidates if t.symbol == symbol)
@@ -172,7 +180,9 @@ def run_once(live: bool = False, replay: bool = False) -> None:
                 interval=cfg.runtime.kline_interval,
                 limit=cfg.runtime.kline_limit,
             )
+            logger.info("Loaded candles from Bybit: %s", len(candles))
         except Exception as exc:
+            logger.warning("Klines unavailable, using local fallback: %s", exc)
             event_store.append("warning", {"reason": f"kline unavailable: {exc}"})
             candles = _sample_candles(mid_hint)
             metrics.inc("fallback_kline")
@@ -183,9 +193,11 @@ def run_once(live: bool = False, replay: bool = False) -> None:
 
         levels = detect_levels_from_candles(candles, eps=max(candles[-1].close * 0.001, 0.5), min_touches=3)
         patterns = detect_patterns(candles)
+        logger.info("Signal context: levels=%s patterns=%s", len(levels), [p.name for p in patterns])
         event_store.append("signal.context", {"levels": len(levels), "patterns": [p.name for p in patterns]})
 
         if not levels:
+            logger.info("Skip run: no levels detected")
             print("No levels detected; skip")
             return
 
@@ -219,7 +231,9 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             )
             l2.apply(delta)
             circuit_breaker.register_success()
+            logger.info("Orderbook ready: bid1=%s ask1=%s spread_bps=%.3f", l2.state.bid1, l2.state.ask1, l2.state.spread_bps)
         except Exception as exc:
+            logger.warning("Orderbook unavailable, using synthetic fallback: %s", exc)
             event_store.append("warning", {"reason": f"orderbook unavailable: {exc}"})
             circuit_breaker.register_error()
             metrics.inc("fallback_orderbook")
@@ -251,22 +265,35 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             )
 
         micro = build_microstructure_state(l2.state, l2.state, hold_above_ms=hold_above_ms, hold_below_ms=hold_below_ms)
+        logger.info(
+            "Microstructure: mid=%.6f spread_bps=%.3f imbalance=%.3f ofi=%.3f hold_above=%sms hold_below=%sms",
+            micro.mid,
+            micro.spread_bps,
+            micro.imbalance_l1,
+            micro.ofi_approx,
+            micro.hold_above_ms,
+            micro.hold_below_ms,
+        )
         metrics.set_gauge("spread_bps", micro.spread_bps)
 
         if circuit_breaker.is_tripped(micro.spread_bps):
             event_store.append("halt", {"reason": "circuit breaker tripped", "spread_bps": micro.spread_bps})
+            logger.warning("Circuit breaker tripped: spread_bps=%.3f max=%.3f", micro.spread_bps, cfg.strategy.max_spread_bps)
             print("Circuit breaker tripped; halt")
             return
 
         if kill_switch.should_halt(equity=risk.equity, daily_pnl=risk.daily_pnl, open_risk=risk.open_risk):
             event_store.append("halt", {"reason": "kill switch", "daily_pnl": risk.daily_pnl, "open_risk": risk.open_risk})
+            logger.warning("Kill switch tripped: daily_pnl=%.4f open_risk=%.4f", risk.daily_pnl, risk.open_risk)
             print("Kill switch halted trading")
             return
 
         signal = StrategyCore(cfg.strategy).generate(symbol, levels, micro, patterns)
+        logger.info("Signal generated: kind=%s reason=%s", signal.kind, signal.reason)
         event_store.append("signal", {"kind": signal.kind, "reason": signal.reason})
 
         if not signal.kind.startswith("breakout"):
+            logger.info("No trade opened: %s", signal.reason)
             print({"signal": signal.kind, "reason": signal.reason, "patterns": [p.name for p in patterns]})
             return
 
@@ -274,8 +301,10 @@ def run_once(live: bool = False, replay: bool = False) -> None:
         entry = micro.mid
         stop = entry * (0.999 if side == "Buy" else 1.001)
         qty, risk_usdt = risk.size_position(entry, stop)
+        logger.info("Risk sizing: side=%s entry=%.6f stop=%.6f qty=%.6f risk_usdt=%.4f", side, entry, stop, qty, risk_usdt)
         if not risk.can_trade(risk_usdt):
             event_store.append("blocked", {"reason": "risk manager"})
+            logger.warning("Risk manager blocked order: risk_usdt=%.4f", risk_usdt)
             print("Risk limits blocked order")
             return
 
@@ -300,6 +329,13 @@ def run_once(live: bool = False, replay: bool = False) -> None:
                 "trailing_distance_pct": exit_plan.trailing_distance_pct,
             },
         )
+        logger.info(
+            "Exit plan: tp=%.6f sl=%.6f partial=%.2f trailing_distance_pct=%.4f",
+            exit_plan.take_profit,
+            exit_plan.stop_loss,
+            exit_plan.partial_close_ratio,
+            exit_plan.trailing_distance_pct,
+        )
 
         created_ts = int(time.time() * 1000)
 
@@ -316,6 +352,7 @@ def run_once(live: bool = False, replay: bool = False) -> None:
                     sell_leverage=lev,
                 )
                 event_store.append("leverage.set", {"symbol": symbol, "leverage": lev, "response": lev_resp})
+                logger.info("Leverage set: symbol=%s leverage=%s", symbol, lev)
 
             result = client.place_order(
                 category=cfg.exchange.category,
@@ -325,6 +362,7 @@ def run_once(live: bool = False, replay: bool = False) -> None:
                 order_type=cfg.exchange.order_type,
             )
             event_store.append("order.live", {"symbol": symbol, "side": side, "qty": qty_str, "response": result})
+            logger.info("Live order submitted: symbol=%s side=%s qty=%s", symbol, side, qty_str)
             print({"mode": "live", "signal": signal.kind, "symbol": symbol, "side": side, "qty": qty_str, "exchange": result})
             # conservative assumption in live path
             simulated_fill_price = entry
@@ -341,6 +379,7 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             )
             fill = sim.simulate(order, best_bid=l2.state.bid1[0], best_ask=l2.state.ask1[0])
             event_store.append("order.paper", {"symbol": symbol, "side": side, "qty": qty_str, "fill_status": fill.status, "fee": fill.fee_paid})
+            logger.info("Paper order simulated: status=%s filled_qty=%.6f avg_price=%.6f fee=%.6f", fill.status, fill.filled_qty, fill.avg_fill_price, fill.fee_paid)
             print({"mode": "paper", "signal": signal.kind, "symbol": symbol, "side": side, "qty": qty_str, "paper": paper_result, "fill": fill})
             simulated_fill_price = fill.avg_fill_price if fill.avg_fill_price > 0 else entry
             simulated_latency = fill.latency_ms
@@ -359,6 +398,7 @@ def run_once(live: bool = False, replay: bool = False) -> None:
             metrics.inc("orders_rejected")
 
         event_store.append("execution", {"symbol": symbol, "status": status, "filled_qty": filled_qty, "fee_paid": fee_paid, "latency_ms": simulated_latency})
+        logger.info("Execution stats: status=%s filled_qty=%.6f fee=%.6f latency_ms=%s", status, filled_qty, fee_paid, simulated_latency)
 
         # Partial TP + trailing-stop lifecycle simulation based on recent/future-like path
         path = [c.close for c in candles[-30:]]
@@ -379,6 +419,14 @@ def run_once(live: bool = False, replay: bool = False) -> None:
                 "exit_price": exit_result.exit_price,
                 "reason": exit_result.reason,
             },
+        )
+        logger.info(
+            "Exit simulation: tp_hit=%s partial_closed=%.6f trailing=%s exit_price=%s reason=%s",
+            exit_result.tp_hit,
+            exit_result.partial_closed_qty,
+            exit_result.trailing_activated,
+            exit_result.exit_price,
+            exit_result.reason,
         )
 
         alert_msgs = alerts.evaluate(

@@ -66,6 +66,7 @@ class RuntimeConfig:
     kline_limit: int = 200
     orderbook_limit: int = 50
     event_store_path: str = "events/bot_events.jsonl"
+    log_level: str = "INFO"
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ class BotConfig:
                 kline_limit=int(os.getenv("BOT_KLINE_LIMIT", "200")),
                 orderbook_limit=int(os.getenv("BOT_ORDERBOOK_LIMIT", "50")),
                 event_store_path=os.getenv("BOT_EVENT_STORE_PATH", "events/bot_events.jsonl"),
+                log_level=os.getenv("BOT_LOG_LEVEL", "INFO").upper(),
             ),
             monitoring=MonitoringConfig(
                 max_avg_slippage_bps=float(os.getenv("BOT_MAX_AVG_SLIPPAGE_BPS", "8")),
